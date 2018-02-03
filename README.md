@@ -14,22 +14,16 @@ This code was tested on an Ubuntu 16.04 system using Tensorflow 1.2.1.
 ### Phrase Localization Evaluation Demo
 After you download our precomputed features/model you can test it using:
 
-    ```Shell
     python main.py --test --spatial --name runs/cite_spatial_k4/model_best
-    ```
 
 ### Training New Models
 Our code contains everything required to train or test models using precomputed features.  You can train a new model on Flickr30K Entites using:
 
-    ```Shell
     python main.py --name <name of experiment>
-    ```
 
 When it completes training it will output the localization accuracy using the best model on the testing and validation sets. You can see a listing and description of many tuneable parameters with:
 
-    ```Shell
     python main.py --help
-    ```
 
 ### Precomputed Features
 
