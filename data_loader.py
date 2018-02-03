@@ -17,11 +17,11 @@ class DataLoader:
         datafn = os.path.join('data', 'flickr', '%s_imfeats.h5' % split)
         self.data = h5py.File(datafn, 'r')
         vecs = np.array(self.data['phrase_features'], np.float32)
-        uniquePhrases = list(self.data['phrases'])
-        assert(vecs.shape[0] == len(uniquePhrases))
+        phrases = list(self.data['phrases'])
+        assert(vecs.shape[0] == len(phrases))
 
         w2v_dict =  {}
-        for index, phrase in enumerate(uniquePhrases):
+        for index, phrase in enumerate(phrases):
             w2v_dict[phrase] =  vecs[index, :]
 
         # mapping from uniquePhrase to w2v
@@ -30,8 +30,6 @@ class DataLoader:
         self.n_pairs = len(self.pairs[0])
         self.pair_index = range(self.n_pairs)
 
-        self.uniquePhrases = uniquePhrases # set of unique phrases
-            
         self.split = split
         self.plh = plh
         self.is_train = split == 'train'

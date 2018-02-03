@@ -81,6 +81,12 @@ def setup_model(args, phrase_plh, region_plh, train_phase_plh, labels_plh, num_b
     labels_plh -- indicates positive (1), negative (-1), or ignore (0)
     num_boxes_plh -- number of boxes per example in the batch
     region_feature_dim -- dimensions of the region features
+
+    Returns:
+    total_loss -- weighted combination of the region and concept loss
+    region_loss -- logistic loss for phrase-region prediction
+    concept_loss -- L1 loss for the output of the concept weight branch
+    region_prob -- each row contains the probability a region is associated with a phrase
     """
     labels_plh = tf.reshape(labels_plh, [-1, num_boxes_plh])
     eb_fea_plh = tf.reshape(region_plh, [-1, num_boxes_plh, region_feature_dim])

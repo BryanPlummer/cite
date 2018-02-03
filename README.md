@@ -31,5 +31,7 @@ Along with our example data processing script in `data_processing_example` you c
 
 Our best CITE model on Flickr30K Entities using these precomputed features can be found [here](https://drive.google.com/open?id=1rmeIqYTCIduNc2QWUEdXLHFGrlOzz2xO).
 
+You can download the raw Flickr30K Entities data [here](http://web.engr.illinois.edu/~bplumme2/Flickr30kEntities/), but isn't necessary to use our precomputed features.
 
-Many thanks to [Kevin Shih](https://scholar.google.com/citations?user=4x3DhzAAAAAJ&hl=en) and [Liwei Wang](https://scholar.google.com/citations?user=qnbdnZEAAAAJ&hl=en) for access to their Similarity Network code that was used as the basis for this implementation.
+
+Many thanks to [Kevin Shih](https://scholar.google.com/citations?user=4x3DhzAAAAAJ&hl=en) and [Liwei Wang](https://scholar.google.com/citations?user=qnbdnZEAAAAJ&hl=en) for access to their [Similarity Network](https://arxiv.org/abs/1704.03470) code that was used as the basis for this implementation.

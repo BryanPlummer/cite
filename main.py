@@ -28,7 +28,7 @@ parser.add_argument('--lr', type=float, default=5e-5, metavar='LR',
 parser.add_argument('--embed_l1', type=float, default=5e-5,
                     help='weight of the L1 regularization term used on the concept weight branch (default: 5e-5)')
 parser.add_argument('--max_epoch', type=int, default=0,
-                    help='maximum number of epochs, <1 indicates no limit (default: 0)')
+                    help='maximum number of epochs, less than 1 indicates no limit (default: 0)')
 parser.add_argument('--no_gain_stop', type=int, default=5,
                     help='number of epochs used to perform early stopping based on validation performance (default: 5)')
 parser.add_argument('--neg_to_pos_ratio', type=int, default=2,

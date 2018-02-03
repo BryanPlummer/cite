@@ -1,6 +1,6 @@
 # Conditional Image-Text Embedding Networks
 
-The code currently assumes datasets are divided into three hdf5 files named `<split>_imfeats.h5` where `split` takes on the value train, test, or val.  It assumes it has the following items:
+The code currently assumes datasets are divided into three hdf5 files named `<split>_imfeats.h5` where `split` takes on the value train, test, or val.  It assumes the hdf5 files contain the following items:
 
 1. phrase_features: #num_phrase X 6000 dimensional matrix of phrase features
 2. phrases: array of #num_phrase strings corresponding to the phrase features
