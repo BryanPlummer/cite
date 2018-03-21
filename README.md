@@ -33,7 +33,7 @@ When it completes training it will output the localization accuracy using the be
 
 Along with our example data processing script in `data_processing_example` you can download our precomputed (PASCAL) features for the Flickr30K Entities dataset [here](https://drive.google.com/open?id=10h55xBQnaYAEwODsi8Wy5CEsajAoZuzc) (126G) and ReferIt dataset [here](https://drive.google.com/open?id=1tQNG4iUXiGatnbeaO6HV3por7U5WoruH) (88G).  Unpack the features in a folder named `data` or update the path in the data loader class.
 
-Our best CITE model using these precomputed features can be on Flickr30K Entities can be found [here](https://drive.google.com/open?id=1vsFqVPVd3vtYfhYTcCmS3HvHOajTycbo) and ReferIt dataset [here]([here](https://drive.google.com/open?id=1P9g9C-BjY-DWIptvV80HE-hEbCDMk6jM)).
+Our best CITE model using these precomputed features can be on Flickr30K Entities can be found [here](https://drive.google.com/open?id=1vsFqVPVd3vtYfhYTcCmS3HvHOajTycbo) and ReferIt dataset [here](https://drive.google.com/open?id=1P9g9C-BjY-DWIptvV80HE-hEbCDMk6jM).
 
 You can download the raw Flickr30K Entities data [here](http://web.engr.illinois.edu/~bplumme2/Flickr30kEntities/) and ReferIt [here](http://tamaraberg.com/referitgame/), but isn't necessary to use our precomputed features.
 
