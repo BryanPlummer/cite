@@ -41,8 +41,8 @@ parser.add_argument('--test_success_thresh', type=float, default=0.5,
                     help='minimum testing intersection-over-union threshold for success (default: 0.5)')
 parser.add_argument('--dim_embed', type=int, default=256,
                     help='how many dimensions in final embedding (default: 256)')
-parser.add_argument('--max_boxes', type=int, default=200,
-                    help='maximum number of edge boxes per image (default: 200)')
+parser.add_argument('--max_boxes', type=int, default=500,
+                    help='maximum number of edge boxes per image (default: 500)')
 parser.add_argument('--num_embeddings', type=int, default=4,
                     help='number of embeddings to train (default: 4)')
 parser.add_argument('--spatial', dest='spatial', action='store_true', default=False,
@@ -62,10 +62,10 @@ def main():
             region_feature_dim += 8
             
     # setup placeholders
-    labels_plh = tf.placeholder(tf.float32, shape=[args.batch_size, None])
+    labels_plh = tf.placeholder(tf.float32, shape=[args.batch_size, args.max_boxes])
     phrase_plh = tf.placeholder(tf.float32, shape=[args.batch_size,
                                                    phrase_feature_dim])
-    region_plh = tf.placeholder(tf.float32, shape=[args.batch_size, None,
+    region_plh = tf.placeholder(tf.float32, shape=[args.batch_size, args.max_boxes,
                                                    region_feature_dim])
     train_phase_plh = tf.placeholder(tf.bool, name='train_phase')
     num_boxes_plh = tf.placeholder(tf.int32)

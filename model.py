@@ -1,10 +1,5 @@
 import tensorflow as tf
 
-from tensorflow.contrib.layers.python.layers import batch_norm
-from tensorflow.contrib.layers.python.layers import convolution2d
-from tensorflow.contrib.layers.python.layers import fully_connected
-from tensorflow.contrib.layers.python.layers import l2_regularizer
-
 def add_fc(x, outdim, train_phase_plh, scope_in):
     """Returns the output of a FC-BNORM-ReLU sequence.
 
@@ -62,9 +57,10 @@ def embedding_branch(x, embed_dim, train_phase_plh, scope_in, do_l2norm = True, 
         outdim = embed_dim
 
     l2_reg = tf.contrib.layers.l2_regularizer(0.001)
-    embed_fc2 = fully_connected(embed_fc1, outdim, activation_fn = None,
-                                weights_regularizer = l2_reg,
-                                scope = scope_in + '_embed_2')
+    embed_fc2 = tf.contrib.layers.fully_connected(embed_fc1, outdim, 
+                                                  activation_fn = None,
+                                                  weights_regularizer = l2_reg,
+                                                  scope = scope_in + '_embed_2')
     if do_l2norm:
         embed_fc2 = tf.nn.l2_normalize(embed_fc2, 1)
 
@@ -88,9 +84,6 @@ def setup_model(args, phrase_plh, region_plh, train_phase_plh, labels_plh, num_b
     concept_loss -- L1 loss for the output of the concept weight branch
     region_prob -- each row contains the probability a region is associated with a phrase
     """
-    labels_plh = tf.reshape(labels_plh, [-1, num_boxes_plh])
-    eb_fea_plh = tf.reshape(region_plh, [-1, num_boxes_plh, region_feature_dim])
-    
     final_embed = args.dim_embed
     embed_dim = final_embed * 4
     phrase_embed = embedding_branch(phrase_plh, embed_dim, train_phase_plh, 'phrase')
@@ -108,9 +101,9 @@ def setup_model(args, phrase_plh, region_plh, train_phase_plh, labels_plh, num_b
                                        concept_id, concept_weights)
         
     joint_embed_2 = tf.reshape(joint_embed_2, [tf.shape(joint_embed_2)[0], num_boxes_plh, final_embed])
-    joint_embed_3 = fully_connected(joint_embed_2, 1, activation_fn=None ,
-                                    weights_regularizer = l2_regularizer(0.005),
-                                    scope = 'joint_embed_3')
+    joint_embed_3 = tf.contrib.layers.fully_connected(joint_embed_2, 1, activation_fn=None ,
+                                                      weights_regularizer = tf.contrib.layers.l2_regularizer(0.005),
+                                                      scope = 'joint_embed_3')
     joint_embed_3 = tf.squeeze(joint_embed_3, [2])
     region_prob = 1. / (1. + tf.exp(-joint_embed_3))
     

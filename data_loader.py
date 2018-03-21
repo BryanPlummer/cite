@@ -14,7 +14,7 @@ class DataLoader:
         plh -- placeholder dictory containing the tensor inputs
         split -- the data split (i.e. 'train', 'test', 'val')
         """
-        datafn = os.path.join('data', 'flickr', '%s_imfeats.h5' % split)
+        datafn = os.path.join('data', args.dataset, '%s_imfeats.h5' % split)
         self.data = h5py.File(datafn, 'r')
         vecs = np.array(self.data['phrase_features'], np.float32)
         phrases = list(self.data['phrases'])
