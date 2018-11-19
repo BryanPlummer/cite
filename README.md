@@ -2,11 +2,11 @@
 
 **cite** contains a Tensorflow implementation for our [paper](https://arxiv.org/abs/1711.08389).  If you find this code useful in your research, please consider citing:
 
-    @article{plummerCITE2017,
+    @inproceedings{plummerCITE2018,
 	Author = {Bryan A. Plummer and Paige Kordas and M. Hadi Kiapour and Shuai Zheng and Robinson Piramuthu and Svetlana Lazebnik},
 	Title = {Conditional Image-Text Embedding Networks},
-	Journal = {arXiv:1711.08389},
-	Year = {2017}
+	Booktitle  = {ECCV},
+	Year = {2018}
     }
 
 This code was tested on an Ubuntu 16.04 system using Tensorflow 1.2.1.
@@ -38,4 +38,4 @@ Our best CITE model using these precomputed features can be on Flickr30K Entitie
 You can download the raw Flickr30K Entities data [here](http://web.engr.illinois.edu/~bplumme2/Flickr30kEntities/) and ReferIt [here](http://tamaraberg.com/referitgame/), but isn't necessary to use our precomputed features.
 
 
-Many thanks to [Kevin Shih](https://scholar.google.com/citations?user=4x3DhzAAAAAJ&hl=en) and [Liwei Wang](https://scholar.google.com/citations?user=qnbdnZEAAAAJ&hl=en) for access to their [Similarity Network](https://arxiv.org/abs/1704.03470) code that was used as the basis for this implementation.
+Many thanks to [Kevin Shih](https://scholar.google.com/citations?user=4x3DhzAAAAAJ&hl=en) and [Liwei Wang](https://scholar.google.com/citations?user=qnbdnZEAAAAJ&hl=en) for providing to their implementation of the [Similarity Network](https://arxiv.org/abs/1704.03470) that was used as the basis for this implementation.
