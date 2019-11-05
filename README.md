@@ -11,14 +11,14 @@
 
 This code was tested on an Ubuntu 16.04 system using Tensorflow 1.2.1.
 
-### Phrase Localization Evaluation Demo
-After you download our precomputed features/model you can test it using:
+### Phrase Localization Evaluation
+You can test a model using:
 
-    python main.py --test --spatial --resume runs/cite_spatial_k4/model_best
+    python main.py --test --spatial --resume runs/<experiment_name>/model_best
 
-You can test the ReferIt dataset by setting the dataset flag and adjusting the number of embeddings to match the trained model:
+You can test the ReferIt dataset by setting the dataset flag and adjusting the number of embeddings to match the trained model, e.g. to train a model with 12 conditional embeddings you would use:
 
-    python main.py --test --spatial --dataset referit --num_embeddings 12 --resume runs/referit_spatial_k12/model_best
+    python main.py --test --spatial --dataset referit --num_embeddings 12 --resume runs/<experiment_name>/model_best
 
 ### Training New Models
 Our code contains everything required to train or test models using precomputed features.  You can train a new model on Flickr30K Entites using:
@@ -31,11 +31,9 @@ When it completes training it will output the localization accuracy using the be
 
 ### Precomputed Features
 
-Along with our example data processing script in `data_processing_example` you can download our precomputed (PASCAL) features for the Flickr30K Entities dataset [here](https://drive.google.com/open?id=10h55xBQnaYAEwODsi8Wy5CEsajAoZuzc) (126G) and ReferIt dataset [here](https://drive.google.com/open?id=1tQNG4iUXiGatnbeaO6HV3por7U5WoruH) (88G).  Unpack the features in a folder named `data` or update the path in the data loader class.
+We recommend using the `data/cache_cite_features.sh` script from the [phrase detection repository](https://github.com/BryanPlummer/phrase_detection) to obtain the precomputed features to use with our model.  These will obtain better performance than our original paper as seen in [this paper](https://arxiv.org/pdf/1811.07212.pdf), i.e. about 72/54 localization accuracy on Flickr30K Entities and Referit, respectively.  You can also find an explanation of the format of the dataset in the `data_processing_example`.
 
-Our best CITE model using these precomputed features can be on Flickr30K Entities can be found [here](https://drive.google.com/open?id=1vsFqVPVd3vtYfhYTcCmS3HvHOajTycbo) and ReferIt dataset [here](https://drive.google.com/open?id=1P9g9C-BjY-DWIptvV80HE-hEbCDMk6jM).
-
-You can download the raw Flickr30K Entities data [here](http://web.engr.illinois.edu/~bplumme2/Flickr30kEntities/) and ReferIt [here](http://tamaraberg.com/referitgame/), but isn't necessary to use our precomputed features.
+You can also find precomputed HGLMM features used in our work [here](http://ai.bu.edu/grovle/).
 
 
 Many thanks to [Kevin Shih](https://scholar.google.com/citations?user=4x3DhzAAAAAJ&hl=en) and [Liwei Wang](https://scholar.google.com/citations?user=qnbdnZEAAAAJ&hl=en) for providing to their implementation of the [Similarity Network](https://arxiv.org/abs/1704.03470) that was used as the basis for this repo.
