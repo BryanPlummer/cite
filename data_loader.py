@@ -16,7 +16,7 @@ def load_word_embeddings(word_embedding_filename, embedding_length):
             if not line:
                 continue
 
-            vec = line.split(',')
+            vec = line.split()
             if len(vec) != embedding_length + 1:
                 continue
 
@@ -44,7 +44,11 @@ class DataLoader:
         plh -- placeholder dictory containing the tensor inputs
         split -- the data split (i.e. 'train', 'test', 'val')
         """
-        datafn = os.path.join('data', args.dataset, '%s_features.h5' % split)
+        if args.datadir == 'data':
+            datafn = os.path.join(args.datadir, args.dataset, '%s_features.h5' % split)
+        else:
+            datafn = os.path.join(args.datadir, '%s_features.h5' % split)
+
         self.data = h5py.File(datafn, 'r')
 
         phrases = list(self.data['phrases'])
@@ -96,7 +100,6 @@ class DataLoader:
         self.neg_to_pos_ratio = args.neg_to_pos_ratio
         self.batch_size = args.batch_size
         self.max_boxes = args.max_boxes
-        self.num_pos = args.num_pos
         if self.is_train:
             self.success_thresh = args.train_success_thresh
         else:
@@ -324,12 +327,12 @@ class DataLoader:
                     # logistic loss only counts a region labeled as -1 negative
                     gt_labels[pair_id, i, negs[:num_neg]] = -1
 
-        feed_dict = {plh['phrase'] : phrase_features,
-                     plh['region'] : region_features,
+        feed_dict = {plh['phrases'] : phrase_features,
+                     plh['regions'] : region_features,
                      plh['train_phase'] : self.is_train,
-                     plh['num_boxes'] : self.max_boxes,
-                     plh['num_phrases'] : max_phrases,
-                     plh['phrase_denom'] : np.sum(num_phrases).astype(np.float32) + 1e-6,
+                     plh['boxes_per_image'] : self.max_boxes,
+                     plh['phrases_per_image'] : max_phrases,
+                     plh['phrase_count'] : np.sum(num_phrases).astype(np.float32) + 1e-6,
                      plh['labels'] : gt_labels
         }
 

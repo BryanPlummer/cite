@@ -87,7 +87,6 @@ def extract_axis_1(data, ind):
     batch_range = tf.range(tf.shape(data)[0])
     indices = tf.stack([batch_range, ind], axis=1)
     res = tf.gather_nd(data, indices)
-
     return res
 
 def weight_l2_regularizer(initial_weights, scale, scope=None):
@@ -122,7 +121,7 @@ def weight_l2_regularizer(initial_weights, scale, scope=None):
 
   return l2
 
-def setup_initialize_fc_layers(args, feats, parameters, scope_in, train_phase, norm_axis = 1):
+def setup_initialize_fc_layers(args, feats, parameters, scope_in, train_phase, norm_axis = 2):
     for i, params in enumerate(parameters):
         scaling = params['scaling']
         outdim = len(scaling)
@@ -143,136 +142,189 @@ def setup_initialize_fc_layers(args, feats, parameters, scope_in, train_phase, n
     feats = tf.nn.l2_normalize(feats, norm_axis, epsilon=1e-10)
     return feats
 
-def encode_phrases(args, phrase_plh, train_phase_plh, num_phrases_plh, phrase_feature_dim, phrase_denom_plh, vecs):
-    final_embed = args.dim_embed
-    embed_dim = final_embed * 4
-    phrase_plh = tf.reshape(phrase_plh, [-1, num_phrases_plh, phrase_feature_dim])
-    # sometimes finetuning word embedding helps (with l2 reg), but often doesn't
-    # seem to make a big difference
-    word_embeddings = tf.get_variable('word_embeddings', vecs.shape, initializer=tf.constant_initializer(vecs), trainable = args.embedding_ft)
-    embedded_words = tf.nn.embedding_lookup(word_embeddings, phrase_plh)
+class CITE():
+    def __init__(self, args, vecs = None, max_length = None, region_feature_dim = None):
+        self.args = args
+        self.embeddings = vecs
+        self.phrase_length = max_length
+        self.region_dim = region_feature_dim
+        self.final_embed = self.args.dim_embed
+        self.embed_dim = self.final_embed * 4
+        self.train_phase = None
+        self.labels = None
 
-    # if you do finetune
-    embed_l2reg = tf.zeros(1)
-    if args.embedding_ft:
-        embed_l2reg = tf.nn.l2_loss(word_embeddings - vecs)
+    def compute_loss(self, region_scores, concept_loss, embed_l2reg):
+        labels = tf.reshape(self.labels, [self.args.batch_size, self.phrases_per_image, self.boxes_per_image])
+        ind_labels = tf.abs(labels)
 
-    eps = 1e-10
-    if args.language_model == 'gru':
-        phrase_plh = tf.reshape(phrase_plh, [-1, phrase_feature_dim])
-        source_sequence_length = tf.reduce_sum(tf.cast(phrase_plh > 0, tf.int32), 1)
-        embedded_words = tf.reshape(embedded_words, [-1, phrase_feature_dim, vecs.shape[1]])
-        encoder_cell = tf.nn.rnn_cell.GRUCell(final_embed)
-        encoder_outputs, encoder_state = tf.nn.dynamic_rnn(
-            encoder_cell, embedded_words, dtype=encoder_cell.dtype,
-            sequence_length=source_sequence_length)
-        final_outputs = extract_axis_1(encoder_outputs, source_sequence_length-1)
-        phrase_input = tf.reshape(final_outputs, [-1, num_phrases_plh, final_embed])
+        eps = 1e-10
+        num_samples = tf.reduce_sum(ind_labels) + eps
+        region_loss = tf.reduce_sum(tf.log(1+tf.exp(-region_scores*labels))*ind_labels)/num_samples
+        total_loss = region_loss + concept_loss * self.args.embed_l1 + embed_l2reg * self.args.embed_weight
+        return total_loss, region_loss
 
-        outputs = fully_connected(phrase_input, embed_dim, activation_fn = None,
-                                  weights_regularizer = tf.contrib.layers.l2_regularizer(0.005),
-                                  scope = 'phrase_encoder')
-        phrase_embed = tf.nn.l2_normalize(outputs, 2, epsilon=eps)
-    else:
-        num_words = tf.reduce_sum(tf.to_float(phrase_plh > 0), 2, keep_dims=True) + eps
-        phrase_input = tf.nn.l2_normalize(tf.reduce_sum(embedded_words, 2) / num_words, 2)
-        if args.language_model == 'attend':
-            context_vector = tf.tile(tf.expand_dims(phrase_input, 2), (1, 1, phrase_feature_dim, 1))
-            attention_inputs = tf.concat((context_vector, embedded_words), 3)
-            attention_weights = fully_connected(attention_inputs, 1, 
-                                                weights_regularizer = l2_regularizer(0.0005),
-                                                scope = 'self_attend')
-            attention_weights = tf.nn.softmax(tf.squeeze(attention_weights))
-            phrase_input = tf.nn.l2_normalize(tf.reduce_sum(embedded_words * tf.expand_dims(attention_weights, 3), 2), 2)
-            phrase_input = tf.reshape(phrase_input, [-1, num_phrases_plh, vecs.shape[1]])
+    def get_phrase_scores(self, phrase_embed, region_embed, concept_weights):
+        elementwise_prod = tf.expand_dims(phrase_embed, 2)*tf.expand_dims(region_embed, 1)
+        joint_embed_1 = add_fc(elementwise_prod, self.embed_dim, self.train_phase, 'joint_embed_1')
+        joint_embed_2 = concept_layer(joint_embed_1, self.final_embed, self.train_phase, 1, concept_weights)
+        for concept_id in range(2, self.args.num_embeddings+1):
+            joint_embed_2 += concept_layer(joint_embed_1, self.final_embed, self.train_phase,
+                                           concept_id, concept_weights)
 
-        if args.cca_parameters:
-            parameters = pickle.load(open(args.cca_parameters, 'rb'))
-            phrase_embed = setup_initialize_fc_layers(args, phrase_input, parameters, 'lang', train_phase_plh, norm_axis=2)
+        joint_embed_3 = fully_connected(joint_embed_2, 1, activation_fn=None ,
+                                        weights_regularizer = l2_regularizer(0.005),
+                                        scope = 'joint_embed_3')
+        joint_embed_3 = tf.squeeze(joint_embed_3, [3])
+        region_prob = 1. / (1. + tf.exp(-joint_embed_3))
+        return region_prob, joint_embed_3
+
+    def get_max_phrase_scores(self, phrase_embed, concept_weights, region_embed):
+        if self.train_phase is None:
+            self.set_region_placeholders()
+            self.set_phrase_placeholders()
+
+        region_embed = tf.reshape(region_embed, shape=[self.args.batch_size, self.boxes_per_image, self.embed_dim])
+        phrase_embed = tf.reshape(phrase_embed, shape=[1, self.phrases_per_image, self.embed_dim])
+        concept_weights = tf.reshape(concept_weights, shape=[1, self.phrases_per_image, self.args.num_embeddings])
+        region_prob, _ = self.get_phrase_scores(phrase_embed, region_embed, concept_weights)
+        
+        best_index = tf.reshape(tf.argmax(region_prob, axis=2), [-1])
+        ind = tf.stack([tf.cast(tf.range(self.phrases_per_image * self.args.batch_size), tf.int64), best_index], axis=1)
+        region_prob = tf.gather_nd(tf.reshape(region_prob, [self.phrases_per_image * self.args.batch_size, -1]), ind)
+        
+        best_index = tf.reshape(best_index, [self.args.batch_size, self.phrases_per_image])
+        region_prob = tf.reshape(region_prob, [self.args.batch_size, self.phrases_per_image])
+        return region_prob, best_index
+
+    def encode_regions(self):
+        if self.train_phase is None:
+            self.set_region_placeholders()
+
+        region_plh = tf.reshape(self.regions, [-1, self.boxes_per_image, self.region_dim])
+        if self.args.cca_parameters:
+            parameters = pickle.load(open(self.args.cca_parameters, 'rb'))
+            region_embed = setup_initialize_fc_layers(self.args, self.regions, parameters, 'vis', self.train_phase, norm_axis=self.args.region_norm_axis)
         else:
-            phrase_embed = embedding_branch(phrase_input, embed_dim, train_phase_plh, 'phrase', norm_axis=2)
+            region_embed = embedding_branch(self.regions, self.embed_dim, self.train_phase, 'region', norm_axis=self.args.region_norm_axis)
 
-    concept_weights = embedding_branch(phrase_input, embed_dim, train_phase_plh, 'concept_weight',
-                                       do_l2norm = False, outdim = args.num_embeddings)
-    concept_loss = tf.reduce_sum(tf.norm(concept_weights, axis=2, ord=1)) / phrase_denom_plh
-    concept_weights = tf.nn.softmax(concept_weights)
-    return phrase_embed, concept_weights, concept_loss, embed_l2reg
+        return region_embed
 
-def encode_regions(args, region_plh, train_phase_plh, num_boxes_plh, region_feature_dim):
-    final_embed = args.dim_embed
-    embed_dim = final_embed * 4
-    region_plh = tf.reshape(region_plh, [-1, num_boxes_plh, region_feature_dim])
-    if args.cca_parameters:
-        parameters = pickle.load(open(args.cca_parameters, 'rb'))
-        region_embed = setup_initialize_fc_layers(args, region_plh, parameters, 'vis', train_phase_plh, norm_axis=args.region_norm_axis)
-    else:
-        region_embed = embedding_branch(region_plh, embed_dim, train_phase_plh, 'region', norm_axis=args.region_norm_axis)
+    def encode_phrases(self):
+        if self.train_phase is None:
+            self.set_phrase_placeholders()
 
-    return region_embed
+        phrase_plh = tf.reshape(self.phrases, [-1, self.phrases_per_image, self.phrase_length])
 
-def get_phrase_scores(args, phrase_embed, region_embed, train_phase_plh, concept_weights = None):
-    if args.two_branch:
-        region_phrase_embedding = region_embed * tf.expand_dims(phrase_embed, 1)
-        region_score = tf.reduce_sum(region_phrase_embedding, 2)
-        return region_score
+        # sometimes finetuning word embedding helps (with l2 reg), but often doesn't
+        # seem to make a big difference
+        word_embeddings = tf.get_variable('word_embeddings', self.embeddings.shape, initializer=tf.constant_initializer(self.embeddings), trainable = self.args.embedding_ft)
+        embedded_words = tf.nn.embedding_lookup(word_embeddings, self.phrases)
 
-    final_embed = args.dim_embed
-    embed_dim = final_embed * 4
-    elementwise_prod = tf.expand_dims(phrase_embed, 2)*tf.expand_dims(region_embed, 1)
-    joint_embed_1 = add_fc(elementwise_prod, embed_dim, train_phase_plh, 'joint_embed_1')
-    joint_embed_2 = concept_layer(joint_embed_1, final_embed, train_phase_plh, 1, concept_weights)
-    for concept_id in range(2, args.num_embeddings+1):
-        joint_embed_2 += concept_layer(joint_embed_1, final_embed, train_phase_plh,
-                                       concept_id, concept_weights)
+        embed_l2reg = tf.squeeze(tf.zeros(1))
+        if self.args.embedding_ft:
+            embed_l2reg = tf.nn.l2_loss(word_embeddings - vecs)
 
-    joint_embed_3 = fully_connected(joint_embed_2, 1, activation_fn=None ,
-                                    weights_regularizer = l2_regularizer(0.005),
-                                    scope = 'joint_embed_3')
-    joint_embed_3 = tf.squeeze(joint_embed_3, [3])
-    region_prob = 1. / (1. + tf.exp(-joint_embed_3))
-    return region_prob, joint_embed_3
+        eps = 1e-10
+        if self.args.language_model == 'gru':
+            phrases = tf.reshape(self.phrases, [-1, self.phrase_length])
+            source_sequence_length = tf.reduce_sum(tf.cast(phrases > 0, tf.int32), 1)
+            embedded_words = tf.reshape(embedded_words, [-1, self.phrase_length, self.embeddings.shape[1]])
+            encoder_cell = tf.nn.rnn_cell.GRUCell(self.final_embed)
+            encoder_outputs, encoder_state = tf.nn.dynamic_rnn(
+                encoder_cell, embedded_words, dtype=encoder_cell.dtype,
+                sequence_length=source_sequence_length)
+            final_outputs = extract_axis_1(encoder_outputs, source_sequence_length-1)
+            phrase_input = tf.reshape(final_outputs, [-1, self.phrases_per_image, self.final_embed])
 
-def get_max_phrase_scores(args, phrase_embed, concept_weights, num_phrases, region_embed, train_phase_plh, num_boxes_plh, embed_dim):
-    region_embed = tf.reshape(region_embed, shape=[args.batch_size, num_boxes_plh, embed_dim])
-    phrase_embed = tf.reshape(phrase_embed, shape=[1, num_phrases, embed_dim])
-    concept_weights = tf.reshape(concept_weights, shape=[1, num_phrases, args.num_embeddings])
-    region_prob, _ = get_phrase_scores(args, phrase_embed, region_embed, train_phase_plh, concept_weights)
+            outputs = fully_connected(phrase_input, self.embed_dim, activation_fn = None,
+                                      weights_regularizer = tf.contrib.layers.l2_regularizer(0.005),
+                                      scope = 'phrase_encoder')
+            phrase_embed = tf.nn.l2_normalize(outputs, 2, epsilon=eps)
+        else:
+            num_words = tf.reduce_sum(tf.to_float(self.phrases > 0), 2, keep_dims=True) + eps
+            phrase_input = tf.nn.l2_normalize(tf.reduce_sum(embedded_words, 2) / num_words, 2)
+            if self.args.language_model == 'attend':
+                context_vector = tf.tile(tf.expand_dims(phrase_input, 2), (1, 1, self.phrase_length, 1))
+                attention_inputs = tf.concat((context_vector, embedded_words), 3)
+                attention_weights = fully_connected(attention_inputs, 1, 
+                                                    weights_regularizer = l2_regularizer(0.0005),
+                                                    scope = 'self_attend')
+                attention_weights = tf.nn.softmax(tf.squeeze(attention_weights))
+                phrase_input = tf.nn.l2_normalize(tf.reduce_sum(embedded_words * tf.expand_dims(attention_weights, 3), 2), 2)
+                phrase_input = tf.reshape(phrase_input, [-1, self.phrases_per_image, self.embeddings.shape[1]])
+                
+            if self.args.cca_parameters:
+                parameters = pickle.load(open(self.args.cca_parameters, 'rb'))
+                phrase_embed = setup_initialize_fc_layers(self.args, phrase_input, parameters, 'lang', self.train_phase)
+            else:
+                phrase_embed = embedding_branch(phrase_input, self.embed_dim, self.train_phase, 'phrase')
+                
+        concept_weights = embedding_branch(phrase_input, self.embed_dim, self.train_phase, 'concept_weight',
+                                           do_l2norm = False, outdim = self.args.num_embeddings)
+        concept_loss = tf.reduce_sum(tf.norm(concept_weights, axis=2, ord=1)) / self.phrase_count
+        concept_weights = tf.nn.softmax(concept_weights)
+        return phrase_embed, concept_weights, concept_loss, embed_l2reg
 
-    best_index = tf.reshape(tf.argmax(region_prob, axis=2), [-1])
-    ind = tf.stack([tf.cast(tf.range(num_phrases * args.batch_size), tf.int64), best_index], axis=1)
-    region_prob = tf.gather_nd(tf.reshape(region_prob, [num_phrases * args.batch_size, -1]), ind)
+    def get_placeholders(self, placeholders = {}):
+        placeholders['labels'] = self.labels
+        if self.train_phase is None:
+            self.set_phrase_placeholders()
+            self.set_region_placeholders()
 
-    best_index = tf.reshape(best_index, [args.batch_size, num_phrases])
-    region_prob = tf.reshape(region_prob, [args.batch_size, num_phrases])
-    return region_prob, best_index
+        placeholders = self.get_region_placeholders(placeholders)
+        placeholders = self.get_phrase_placeholders(placeholders)
+        return placeholders
 
-      
-def setup_cite_model(args, phrase_plh, region_plh, train_phase_plh, labels_plh, num_boxes_plh, num_phrases_plh, region_feature_dim, phrase_feature_dim, phrase_denom_plh, vecs):
-    """Describes the computational graph and returns the losses and outputs.
+    def get_region_placeholders(self, placeholders = {}):
+        if self.train_phase is None:
+            self.set_region_placeholders()
 
-    Arguments:
-    args -- command line arguments passed into the main function
-    phrase_plh -- tensor containing the phrase features
-    region_plh -- tensor containing the region features
-    train_phase_plh -- indicator whether model is in training mode
-    labels_plh -- indicates positive (1), negative (-1), or ignore (0)
-    num_boxes_plh -- number of boxes per example in the batch
-    region_feature_dim -- dimensions of the region features
-    vecs -- initial word embedding, assumes 0th index is padding (i.e. all zeros)
+        placeholders['regions'] = self.regions
+        placeholders['train_phase'] = self.train_phase
+        placeholders['boxes_per_image'] = self.boxes_per_image
+        return placeholders
 
-    Returns:
-    total_loss -- weighted combination of the region and concept loss
-    region_loss -- logistic loss for phrase-region prediction
-    concept_loss -- L1 loss for the output of the concept weight branch
-    region_prob -- each row contains the probability a region is associated with a phrase
-    """
-    eps = 1e-10
-    labels_plh = tf.reshape(labels_plh, [args.batch_size, num_phrases_plh, num_boxes_plh])
-    phrase_embed, concept_weights, concept_loss, embed_l2reg = encode_phrases(args, phrase_plh, train_phase_plh, num_phrases_plh, phrase_feature_dim, phrase_denom_plh, vecs)
-    region_embed = encode_regions(args, region_plh, train_phase_plh, num_boxes_plh, region_feature_dim)
-    region_prob, joint_embed_3 = get_phrase_scores(args, phrase_embed, region_embed, train_phase_plh, concept_weights)
-    ind_labels = tf.abs(labels_plh)
-    num_samples = tf.reduce_sum(ind_labels) + eps
-    region_loss = tf.reduce_sum(tf.log(1+tf.exp(-joint_embed_3*labels_plh))*ind_labels)/num_samples
-    total_loss = region_loss + concept_loss * args.embed_l1 + embed_l2reg * args.embed_weight
-    return total_loss, region_loss, concept_loss, region_prob
+    def get_phrase_placeholders(self, placeholders = {}):
+        if self.train_phase is None:
+            self.set_phrase_placeholders()
+
+        placeholders['phrases'] = self.phrases
+        placeholders['train_phase'] = self.train_phase
+        placeholders['phrases_per_image'] = self.phrases_per_image
+        placeholders['phrase_count'] = self.phrase_count
+        return placeholders
+
+    def set_region_placeholders(self):
+        if self.train_phase is None:
+            self.train_phase = tf.placeholder(tf.bool, name='train_phase')
+
+        self.boxes_per_image = tf.placeholder(tf.int32)
+        self.regions = tf.placeholder(tf.float32, shape=[None, None, None])
+
+    def set_phrase_placeholders(self):
+        if self.train_phase is None:
+            self.train_phase = tf.placeholder(tf.bool, name='train_phase')
+
+        self.phrases_per_image = tf.placeholder(tf.int32)
+        self.phrase_count = tf.placeholder(tf.float32)
+        self.phrases = tf.placeholder(tf.int32, shape=[None, None, None])
+        
+    def setup_model(self):
+        """
+        Defines the computational graph used for the CITE model
+
+        Returns:
+          total_loss -- weighted combination of the region and concept loss
+          region_loss -- logistic loss for phrase-region prediction
+          concept_loss -- L1 loss for the output of the concept weight branch
+          region_prob -- each row contains the probability a region is associated with a phrase
+        """
+        self.set_region_placeholders()
+        self.set_phrase_placeholders()
+        self.labels = tf.placeholder(tf.float32, shape=[None, None, None])
+
+        phrase_embed, concept_weights, concept_loss, embed_l2reg = self.encode_phrases()
+        region_embed = self.encode_regions()
+        region_prob, region_scores = self.get_phrase_scores(phrase_embed, region_embed, concept_weights)
+        total_loss, region_loss = self.compute_loss(region_scores, concept_loss, embed_l2reg)
+        return total_loss, region_loss, concept_loss, region_prob
