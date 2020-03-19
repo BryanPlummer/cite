@@ -66,6 +66,8 @@ parser.add_argument('--spatial', dest='spatial', action='store_true', default=Fa
                     help='flag indicating whether to use spatial features')
 parser.add_argument('--npa', action='store_true', default=False,
                     help='use hard-negative phrase mining')
+parser.add_argument('--num_confusion_phrases', type=int, default=500,
+                    help='maximum number of phrases per entry in the npa confusion table (default: 500)')
 parser.add_argument('--use_augmented', dest='use_augmented', action='store_true', default=False,
                     help='flag indicating whether to use augmented positive phrases (default: use gt only)')
 parser.add_argument('--ifs', action='store_true', default=False,
@@ -80,13 +82,18 @@ parser.add_argument('--embed_weight', type=float, default=1e-5,
 def main():
     global args
     args = parser.parse_args()
+    if args.ifs:
+        if not args.use_augmented:
+            print('Parameter use_augmented set to True due to ifs training')
+
+        args.use_augmented = True
+
     assert args.language_model in ['avg', 'attend', 'gru']
     np.random.seed(args.r_seed)
     tf.set_random_seed(args.r_seed)
     phrase_feature_dim = 6000
     region_feature_dim = 2048
     tok2idx, vecs = load_word_embeddings(args.word_embedding, phrase_feature_dim)
-
     if args.spatial:
         region_feature_dim += 5
 
@@ -98,16 +105,17 @@ def main():
         test(model, test_loader, plh, model_name=args.resume)
         sys.exit()
 
-    save_model_directory =  os.path.join('runs', args.dataset, args.name)
-    if not os.path.exists(save_model_directory):
-        os.makedirs(save_model_directory)
+    save_directory =  os.path.join('runs', args.dataset, args.name)
+    if not os.path.exists(save_directory):
+        os.makedirs(save_directory)
+
     # training with Adam
-    acc, best_adam = train(model, train_loader, val_loader, plh, args.resume)
+    acc, best_adam = train(model, train_loader, val_loader, plh, args.resume, save_directory)
 
     # finetune with SGD after loading the best model trained with Adam
-    best_model_filename = os.path.join('runs', args.dataset, args.name, 'model_best')
+    best_model_filename = os.path.join(save_directory, 'model_best')
     acc, best_sgd = train(model, train_loader, val_loader, plh,
-                          best_model_filename, False, acc)
+                          best_model_filename, save_directory, False, acc)
     best_epoch = best_adam + best_sgd
     
     # get performance on test set
@@ -139,58 +147,6 @@ def test(model, test_loader, plh, sess=None, model_name = None):
         test_loader.split, round(acc*100, 2), int(total)))
     return acc
 
-def update_confusion_table(model, test_loader, train_loader, plh, sess):
-    region_weights = model[3]
-    correct = 0.0
-    n_iterations = test_loader.num_batches_confusion()
-    feeds = []
-    ims = []
-    num_boxes = []
-    for batch_id in range(n_iterations):
-        feed_dict, ii, jj = test_loader.get_batch_confusion(batch_id, plh, train_loader.max_phrases)
-        feeds.append(feed_dict)
-        ims += ii
-        num_boxes.append(jj)
-
-    train_loader.confusion_table = {}
-    n_phrase_iters = train_loader.num_batches_phrases()
-    for batch_id in tqdm(range(n_phrase_iters), desc='updating confusion table', total=n_phrase_iters):
-
-        phrase_features, num_phrases, all_phrase = train_loader.get_phrase_batch(batch_id)
-        all_scores = []
-        for nn, feed_dict in zip(num_boxes, feeds):
-            feed_dict[plh['phrase']] = phrase_features
-            s = sess.run(region_weights, feed_dict = feed_dict)
-            s[:, num_phrases:, :] = -np.inf
-            for i, n in enumerate(nn):
-                s[i, :, n:] = -np.inf
-
-            all_scores.append(s)
-
-        all_scores = np.concatenate(all_scores)[:len(ims)]
-        for phrase_id, phrase in enumerate(all_phrase):
-            scores = all_scores[:, phrase_id, :]
-            n_boxes = float(scores.shape[1])
-            order = np.argsort(scores.reshape(-1))[::-1]
-            N = 500
-            predicted_phrases = []
-            for i in order:
-                if N < 1:
-                    break
-
-                index = int(np.floor(i / n_boxes))
-                im = ims[index]
-                box_idx = int(i - index * n_boxes)
-                if box_idx not in test_loader.im2phrase[im]:
-                    continue
-
-                phrases = test_loader.im2phrase[im][box_idx]
-                if phrase not in phrases:
-                    N -= 1
-                    predicted_phrases += list(phrases)
-                
-            train_loader.confusion_table[phrase] = predicted_phrases
-
 def process_epoch(model, train_loader, plh, sess, train_step, epoch, suffix):
     train_loader.shuffle()
     
@@ -213,8 +169,8 @@ def process_epoch(model, train_loader, plh, sess, train_step, epoch, suffix):
                                                   len(train_loader), epoch,
                                                   suffix))
 
-def train(model, train_loader, test_loader, plh, model_weights, use_adam = True,
-          best_acc = 0.):
+def train(model, train_loader, test_loader, plh, model_weights, save_directory, 
+          use_adam = True, best_acc = 0.):
     sess = tf.Session()
     if use_adam:
         optim = tf.train.AdamOptimizer(args.lr)
@@ -238,17 +194,17 @@ def train(model, train_loader, test_loader, plh, model_weights, use_adam = True,
             if use_adam:
                 best_acc = test(model, test_loader, plh, sess)
                 if args.npa:
-                    update_confusion_table(model, test_loader, train_loader, plh, sess)
+                    train_loader.update_confusion_table(model, test_loader, plh, sess)
             
         # model trains until args.max_epoch is reached or it no longer
         # improves on the validation set
         while (epoch - best_epoch) < args.no_gain_stop and (args.max_epoch < 1 or epoch <= args.max_epoch):
             update_table = args.npa and epoch > 1 and epoch % 3 == 0
             if update_table:
-                update_confusion_table(model, test_loader, train_loader, plh, sess)
+                train_loader.update_confusion_table(model, test_loader, plh, sess)
 
             process_epoch(model, train_loader, plh, sess, train_step, epoch, suffix)
-            saver.save(sess, os.path.join('runs', args.dataset, args.name, 'checkpoint'),
+            saver.save(sess, os.path.join(save_directory, 'checkpoint'),
                        global_step = epoch)
 
             acc = test(model, test_loader, plh, sess)
@@ -259,7 +215,7 @@ def train(model, train_loader, test_loader, plh, model_weights, use_adam = True,
                 best_acc = acc
 
             if acc > best_acc:
-                saver.save(sess, os.path.join('runs', args.dataset, args.name, 'model_best'))
+                saver.save(sess, os.path.join(save_directory, 'model_best'))
                 if (acc - args.minimum_gain) > best_acc:
                     best_epoch = epoch
 

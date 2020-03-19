@@ -51,23 +51,20 @@ def batch_norm_layer(x, train_phase, scope_bn):
                                       scope=scope_bn)
     return bn
 
-def embedding_branch(x, embed_dim, train_phase_plh, scope_in, do_l2norm = True, outdim = None, norm_axis = 1):
+def embedding_branch(x, embed_dim, out_dim, train_phase_plh, scope_in, do_l2norm = True, norm_axis = 1):
     """Applies a pair of fully connected layers to the input tensor.
 
     Arguments:
     x -- input_tensor
     embed_dim -- dimension of the input to the second fully connected layer
+    out_dim -- dimension of the output embedding, if None out_dim=embed_dim
     train_phase_plh -- indicator whether model is in training mode
     scope_in -- scope prefix for the desired layers
     do_l2norm -- indicates if the output should be l2 normalized
-    outdim -- dimension of the output embedding, if None outdim=embed_dim
     """
     embed_fc1 = add_fc(x, embed_dim, train_phase_plh, scope_in + '_embed_1')
-    if outdim is None:
-        outdim = embed_dim
-
     l2_reg = tf.contrib.layers.l2_regularizer(0.001)
-    embed_fc2 = fully_connected(embed_fc1, outdim, activation_fn = None,
+    embed_fc2 = fully_connected(embed_fc1, out_dim, activation_fn = None,
                                 weights_regularizer = l2_reg,
                                 scope = scope_in + '_embed_2')
     if do_l2norm:
@@ -136,7 +133,6 @@ def setup_initialize_fc_layers(args, feats, parameters, scope_in, train_phase, n
         feats = fully_connected(feats - cca_mean, outdim, activation_fn=activation_fn,
                                 weights_initializer = weights_init,
                                 weights_regularizer = weight_reg,
-                                #trainable=False,
                                 scope = scope_in + '_embed_' + str(i)) * scaling
 
     feats = tf.nn.l2_normalize(feats, norm_axis, epsilon=1e-10)
@@ -148,8 +144,30 @@ class CITE():
         self.embeddings = vecs
         self.phrase_length = max_length
         self.region_dim = region_feature_dim
-        self.final_embed = self.args.dim_embed
-        self.embed_dim = self.final_embed * 4
+        final_embed = args.dim_embed
+        embed_dim = final_embed * 4
+        self.joint_layer_dim = [embed_dim, final_embed]
+        if self.args.cca_parameters and args.language_model != 'gru':
+            self.parameters = pickle.load(open(self.args.cca_parameters, 'rb'))
+            self.phrase_layer_dim = []
+            self.region_layer_dim = []
+            for params in self.parameters:
+                dim_length = len(params['scaling'])
+                self.phrase_layer_dim.append(dim_length)
+                self.region_layer_dim.append(dim_length)
+
+            #if len(self.phrase_layer_dim) > 0:
+            #    self.joint_layer_dim[0] = self.phrase_layer_dim[-1]
+
+        else:
+            self.parameters = None
+            if self.args.language_model == 'gru':
+                self.phrase_layer_dim = [final_embed, embed_dim]
+            else:
+                self.phrase_layer_dim = [embed_dim, embed_dim]
+
+            self.region_layer_dim = [embed_dim, embed_dim]
+
         self.train_phase = None
         self.labels = None
 
@@ -165,10 +183,10 @@ class CITE():
 
     def get_phrase_scores(self, phrase_embed, region_embed, concept_weights):
         elementwise_prod = tf.expand_dims(phrase_embed, 2)*tf.expand_dims(region_embed, 1)
-        joint_embed_1 = add_fc(elementwise_prod, self.embed_dim, self.train_phase, 'joint_embed_1')
-        joint_embed_2 = concept_layer(joint_embed_1, self.final_embed, self.train_phase, 1, concept_weights)
+        joint_embed_1 = add_fc(elementwise_prod, self.joint_layer_dim[0], self.train_phase, 'joint_embed_1')
+        joint_embed_2 = concept_layer(joint_embed_1, self.joint_layer_dim[1], self.train_phase, 1, concept_weights)
         for concept_id in range(2, self.args.num_embeddings+1):
-            joint_embed_2 += concept_layer(joint_embed_1, self.final_embed, self.train_phase,
+            joint_embed_2 += concept_layer(joint_embed_1, self.joint_layer_dim[1], self.train_phase,
                                            concept_id, concept_weights)
 
         joint_embed_3 = fully_connected(joint_embed_2, 1, activation_fn=None ,
@@ -178,13 +196,13 @@ class CITE():
         region_prob = 1. / (1. + tf.exp(-joint_embed_3))
         return region_prob, joint_embed_3
 
-    def get_max_phrase_scores(self, phrase_embed, concept_weights, region_embed):
+    def get_max_phrase_scores(self, phrase_embed, concept_weights, region_embed, embed_dim):
         if self.train_phase is None:
             self.set_region_placeholders()
             self.set_phrase_placeholders()
 
-        region_embed = tf.reshape(region_embed, shape=[self.args.batch_size, self.boxes_per_image, self.embed_dim])
-        phrase_embed = tf.reshape(phrase_embed, shape=[1, self.phrases_per_image, self.embed_dim])
+        region_embed = tf.reshape(region_embed, shape=[self.args.batch_size, self.boxes_per_image, embed_dim])
+        phrase_embed = tf.reshape(phrase_embed, shape=[1, self.phrases_per_image, embed_dim])
         concept_weights = tf.reshape(concept_weights, shape=[1, self.phrases_per_image, self.args.num_embeddings])
         region_prob, _ = self.get_phrase_scores(phrase_embed, region_embed, concept_weights)
         
@@ -201,11 +219,13 @@ class CITE():
             self.set_region_placeholders()
 
         region_plh = tf.reshape(self.regions, [-1, self.boxes_per_image, self.region_dim])
-        if self.args.cca_parameters:
-            parameters = pickle.load(open(self.args.cca_parameters, 'rb'))
-            region_embed = setup_initialize_fc_layers(self.args, self.regions, parameters, 'vis', self.train_phase, norm_axis=self.args.region_norm_axis)
+        if self.parameters is not None:
+            region_embed = setup_initialize_fc_layers(self.args, region_plh, self.parameters, 'vis', 
+                                                      self.train_phase, 
+                                                      norm_axis=self.args.region_norm_axis)
         else:
-            region_embed = embedding_branch(self.regions, self.embed_dim, self.train_phase, 'region', norm_axis=self.args.region_norm_axis)
+            region_embed = embedding_branch(region_plh, self.region_layer_dim[0], self.region_layer_dim[1], 
+                                            self.train_phase, 'region', norm_axis=self.args.region_norm_axis)
 
         return region_embed
 
@@ -217,8 +237,11 @@ class CITE():
 
         # sometimes finetuning word embedding helps (with l2 reg), but often doesn't
         # seem to make a big difference
-        word_embeddings = tf.get_variable('word_embeddings', self.embeddings.shape, initializer=tf.constant_initializer(self.embeddings), trainable = self.args.embedding_ft)
-        embedded_words = tf.nn.embedding_lookup(word_embeddings, self.phrases)
+        word_embeddings = tf.get_variable('word_embeddings', self.embeddings.shape, 
+                                          initializer=tf.constant_initializer(self.embeddings), 
+                                          trainable = self.args.embedding_ft)
+
+        embedded_words = tf.nn.embedding_lookup(word_embeddings, phrase_plh)
 
         embed_l2reg = tf.squeeze(tf.zeros(1))
         if self.args.embedding_ft:
@@ -229,19 +252,20 @@ class CITE():
             phrases = tf.reshape(self.phrases, [-1, self.phrase_length])
             source_sequence_length = tf.reduce_sum(tf.cast(phrases > 0, tf.int32), 1)
             embedded_words = tf.reshape(embedded_words, [-1, self.phrase_length, self.embeddings.shape[1]])
-            encoder_cell = tf.nn.rnn_cell.GRUCell(self.final_embed)
+            encoder_cell = tf.nn.rnn_cell.GRUCell(self.phrase_layer_dim[0])
             encoder_outputs, encoder_state = tf.nn.dynamic_rnn(
                 encoder_cell, embedded_words, dtype=encoder_cell.dtype,
                 sequence_length=source_sequence_length)
             final_outputs = extract_axis_1(encoder_outputs, source_sequence_length-1)
-            phrase_input = tf.reshape(final_outputs, [-1, self.phrases_per_image, self.final_embed])
+            phrase_input = tf.reshape(final_outputs, [-1, self.phrases_per_image, self.phrase_layer_dim[0]])
 
-            outputs = fully_connected(phrase_input, self.embed_dim, activation_fn = None,
+            outputs = fully_connected(phrase_input, self.phrase_layer_dim[1], 
+                                      activation_fn = None,
                                       weights_regularizer = tf.contrib.layers.l2_regularizer(0.005),
                                       scope = 'phrase_encoder')
             phrase_embed = tf.nn.l2_normalize(outputs, 2, epsilon=eps)
         else:
-            num_words = tf.reduce_sum(tf.to_float(self.phrases > 0), 2, keep_dims=True) + eps
+            num_words = tf.reduce_sum(tf.to_float(phrase_plh > 0), 2, keep_dims=True) + eps
             phrase_input = tf.nn.l2_normalize(tf.reduce_sum(embedded_words, 2) / num_words, 2)
             if self.args.language_model == 'attend':
                 context_vector = tf.tile(tf.expand_dims(phrase_input, 2), (1, 1, self.phrase_length, 1))
@@ -251,16 +275,22 @@ class CITE():
                                                     scope = 'self_attend')
                 attention_weights = tf.nn.softmax(tf.squeeze(attention_weights))
                 phrase_input = tf.nn.l2_normalize(tf.reduce_sum(embedded_words * tf.expand_dims(attention_weights, 3), 2), 2)
-                phrase_input = tf.reshape(phrase_input, [-1, self.phrases_per_image, self.embeddings.shape[1]])
+                phrase_input = tf.reshape(phrase_input, [-1, self.phrases_per_image, 
+                                                         self.embeddings.shape[1]])
                 
-            if self.args.cca_parameters:
-                parameters = pickle.load(open(self.args.cca_parameters, 'rb'))
-                phrase_embed = setup_initialize_fc_layers(self.args, phrase_input, parameters, 'lang', self.train_phase)
+            if self.parameters is not None:
+                phrase_embed = setup_initialize_fc_layers(self.args, phrase_input, 
+                                                          self.parameters, 'lang', 
+                                                          self.train_phase)
             else:
-                phrase_embed = embedding_branch(phrase_input, self.embed_dim, self.train_phase, 'phrase')
+                phrase_embed = embedding_branch(phrase_input, self.phrase_layer_dim[0], 
+                                                self.phrase_layer_dim[1], 
+                                                self.train_phase, 'phrase')
                 
-        concept_weights = embedding_branch(phrase_input, self.embed_dim, self.train_phase, 'concept_weight',
-                                           do_l2norm = False, outdim = self.args.num_embeddings)
+        concept_weights = embedding_branch(phrase_input, self.phrase_layer_dim[0], 
+                                           self.args.num_embeddings, self.train_phase,
+                                           'concept_weight', do_l2norm = False)
+
         concept_loss = tf.reduce_sum(tf.norm(concept_weights, axis=2, ord=1)) / self.phrase_count
         concept_weights = tf.nn.softmax(concept_weights)
         return phrase_embed, concept_weights, concept_loss, embed_l2reg
